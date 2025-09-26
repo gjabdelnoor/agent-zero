@@ -108,12 +108,22 @@ After inserting my API key in settings, my Agent Zero instance works. I can send
 - Some parts of A0 require standardized linux environment, additional web services and preinstalled binaries that would be unneccessarily complex to set up in a local environment.
 - To make development easier, we can use existing A0 instance in docker and forward some requests to be executed there using SSH and RFC (Remote Function Call).
 
-1. Pull the docker image `agent0ai/agent-zero` from Docker Hub and run it with a web port (`80`) mapped and SSH port (`22`) mapped.
+1. Pull the docker image `agent0ai/agent-zero` from Docker Hub and run it with the web port (`80`) and SSH port (`22`) mapped. Map the optional GUI ports as well (`5901` for raw VNC, `6080` for the built-in noVNC web client) so you can observe the headless desktop when debugging `desktop_automation` workflows.
+
+   > [!IMPORTANT]
+   > Both desktop bridges bind to `127.0.0.1` inside the container. Use forwards such as `docker run -p 127.0.0.1:<host_port>:5901` or an SSH tunnel that targets localhost to reach them securely. The VNC password is stored at `/var/run/desktop-session/vnc.pass`; override it via `DESKTOP_VNC_PASSWORD` if you need a deterministic credential.
+
 If you want, you can also map the `/a0` folder to our local project folder as well, this way we can update our local instance and the docker instance at the same time.
-This is how it looks in my example: port `80` is mapped to `8880` on the host and `22` to `8822`, `/a0` folder mapped to `/Users/frdel/Desktop/agent-zero`:
+This is how it looks in my example: port `80` is mapped to `8880` on the host, `22` to `8822`, `5901` to `8590`, `6080` to `8680`, `/a0` folder mapped to `/Users/frdel/Desktop/agent-zero`:
 
 ![docker run](res/dev/devinst-11.png)
 ![docker run](res/dev/devinst-12.png)
+
+> [!TIP]
+> An XFCE desktop session runs on display `:99`. You can orchestrate GUI actions from chat via the `desktop_automation` tool and prefer the `inspect` method when you need OCR alongside the screenshot.
+
+> [!NOTE]
+> LibreOffice (with GTK integration, English help, and spell-check dictionaries) is installed during the base image build. Launch `libreoffice`, `libreoffice --calc`, or other suite components directly when validating GUI automation for office workflows.
 
 
 ## Step 6: Configure SSH and RFC connection
@@ -124,7 +134,7 @@ This is how it looks in my example: port `80` is mapped to `8880` on the host an
 2. Set the `RFC Password` field to a new password and save.
 3. Open the "Settings" page in the Web UI of your local instance and go in the "Development" section.
 4. Here set the `RFC Password` field to the same password you used in the dockerized instance. Also set the SSH port and HTTP port the same numbers you used when creating the container - in my case `8822` for SSH and `8880` for HTTP. The `RFC Destination URL` will most probably stay `localhost` as both instances are running on the host machine.
-5. Click save and test by asking your agent to do something in the terminal, like "Get current OS version". It should be able to communicate with the dockerized instance via RFC and SSH and execute the command there, responding with something like "Kali GNU/Linux Rolling".
+5. Click save and test by asking your agent to do something in the terminal, like "Get current OS version". It should be able to communicate with the dockerized instance via RFC and SSH and execute the command there, responding with something like "Ubuntu 24.04 LTS".
 
 My Dockerized instance:
 ![Dockerized instance](res/dev/devinst-14.png)
@@ -153,4 +163,5 @@ You're now ready to contribute to Agent Zero, create custom extensions, or modif
 - You can use the `DockerfileLocal` to build your docker image.
 - Navigate to your project root in the terminal and run `docker build -f DockerfileLocal -t agent-zero-local --build-arg CACHE_DATE=$(date +%Y-%m-%d:%H:%M:%S) .`
 - The `CACHE_DATE` argument is optional, it is used to cache most of the build process and only rebuild the last steps when the files or dependencies change.
-- See `docker/run/build.txt` for more build command examples.
+- To bundle the GUI-ready computer-use profile, build `docker/computer-use/Dockerfile`: `docker build -f docker/computer-use/Dockerfile -t agent-zero-computer-use --build-arg CACHE_DATE=$(date +%Y-%m-%d:%H:%M:%S) .`
+- See `docker/run/build.txt` and `docker/computer-use/build.txt` for more build command examples.

@@ -1,0 +1,9 @@
+# Build a local computer-use image from the current workspace
+# Run from repository root
+
+docker build -f docker/computer-use/Dockerfile -t agent-zero-computer-use \
+    --build-arg BRANCH=local \
+    --build-arg CACHE_DATE=$(date +%Y-%m-%d:%H:%M:%S) .
+
+# Show plain progress output
+# append --progress=plain to any docker build command when debugging

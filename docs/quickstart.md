@@ -46,7 +46,7 @@ Now that you've run a simple task, you can experiment with more complex requests
 * Search the web for information
 * Execute shell commands
 * Explore web development tasks
-* Create or modify files
+* Create or modify files with the `codebase_editor` tool
 
 > [!TIP]
 > The [Usage Guide](usage.md) provides more in-depth information on using Agent 

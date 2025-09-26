@@ -3,36 +3,19 @@ set -e
 
 echo "====================PYTHON START===================="
 
-echo "====================PYTHON 3.12 & SID REPO===================="
+# Refresh package metadata before installing Python
+apt-get update
 
-apt clean
-
-# ★ 1. Add sid repo & pin it for python 3.12
-echo "deb http://deb.debian.org/debian sid main" > /etc/apt/sources.list.d/debian-sid.list
-cat >/etc/apt/preferences.d/python312 <<'EOF'
-Package: *
-Pin: release a=sid
-Pin-Priority: 100
-
-Package: python3.12*
-Pin: release a=sid
-Pin-Priority: 990
-
-# Prevent Python 3.13 from being installed
-Package: python3.13*
-Pin: release *
-Pin-Priority: -1
-EOF
-
-apt-get update && apt-get -y upgrade
-
+echo "====================PYTHON 3.12 PACKAGES===================="
 apt-get install -y --no-install-recommends \
-    python3.12 python3.12-venv python3.12-dev
+    python3 \
+    python3-venv \
+    python3-dev \
+    python3-pip \
+    python3-distutils
 
-# ★ 3. Switch the interpreter
-# update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.13 0
-# update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
-# update-alternatives --set python3 /usr/bin/python3.12
+# Remove cached package data to keep the image small
+rm -rf /var/lib/apt/lists/*
 
 echo "====================PYTHON VERSION: $(python3 --version) ===================="
 echo "====================PYTHON OTHERS: $(ls /usr/bin/python*) "
@@ -40,7 +23,7 @@ echo "====================PYTHON OTHERS: $(ls /usr/bin/python*) "
 echo "====================PYTHON VENV===================="
 
 # create and activate default venv
-python3.12 -m venv /opt/venv
+python3 -m venv /opt/venv
 source /opt/venv/bin/activate
 
 # upgrade pip and install static packages

@@ -58,7 +58,7 @@ The following user guide provides instructions for installing and running Agent 
 
 2. **Run Agent Zero:**
 
-- Note: Agent Zero also offers a Hacking Edition based on Kali linux with modified prompts for cybersecurity tasks. The setup is the same as the regular version, just use the agent0ai/agent-zero:hacking image instead of agent0ai/agent-zero.
+- Note: Agent Zero also offers a Hacking Edition with modified prompts for cybersecurity tasks. The setup is the same as the regular version, just use the agent0ai/agent-zero:hacking image instead of agent0ai/agent-zero.
 
 2.1. Pull the Agent Zero Docker image:
 - Search for `agent0ai/agent-zero` in Docker Desktop
@@ -101,6 +101,11 @@ The following user guide provides instructions for installing and running Agent 
 - Click the `Run` button next to the `agent0ai/agent-zero` image
 - Open the "Optional settings" menu
 - Set the web port (80) to desired host port number in the second "Host port" field or set to `0` for automatic port assignment
+- Map the optional GUI ports if you want remote desktop access: `5901` exposes raw VNC and `6080` serves the browser-based noVNC client
+
+> [!IMPORTANT]
+> The desktop bridges listen on `127.0.0.1` inside the container. Create an SSH tunnel or Docker port-forward that targets `localhost` in the container namespace.
+> VNC access is password-protected; Supervisor stores the credential at `/var/run/desktop-session/vnc.pass` (readable from within the container). Treat this secret carefully and rotate it by setting `DESKTOP_VNC_PASSWORD` before launch if needed.
 
 Optionally you can map local folders for file persistence:
 > [!CAUTION]
@@ -109,6 +114,12 @@ Optionally you can map local folders for file persistence:
 - OPTIONAL: Under "Volumes", configure your mapped folders, if needed:
   - Example host path: Your chosen directory (e.g., `C:\agent-zero\memory`)
   - Example container path: `/a0/memory`
+
+> [!TIP]
+> An XFCE desktop session runs on display `:99`. You can watch it through the tunneled ports or orchestrate GUI actions from chat via the `desktop_automation` tool (use the `inspect` method for quick OCR feedback).
+
+> [!NOTE]
+> LibreOffice (Writer, Calc, Impress, Draw) ships in the base image along with English help files and dictionaries. Launch it from the desktop menu or with `desktop_automation` → `launch` (for example `libreoffice --calc`) when you need office-style workflows.
 
 
 - Click the `Run` button in the "Images" tab.
