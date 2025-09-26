@@ -3,8 +3,11 @@ set -e
 
 echo "====================SEARXNG1 START===================="
 
+# Refresh package metadata because earlier steps may have cleaned the apt cache.
+apt-get update
+
 # Install necessary packages
-apt-get install -y \
+apt-get install -y --no-install-recommends \
     python3.12-dev python3.12-venv \
     git build-essential libxslt-dev zlib1g-dev libffi-dev libssl-dev
 #    python3.12-babel uwsgi uwsgi-plugin-python3

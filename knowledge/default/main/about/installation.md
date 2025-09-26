@@ -58,7 +58,7 @@ The following user guide provides instructions for installing and running Agent 
 
 2. **Run Agent Zero:**
 
-- Note: Agent Zero also offers a Hacking Edition based on Kali linux with modified prompts for cybersecurity tasks. The setup is the same as the regular version, just use the agent0ai/agent-zero:hacking image instead of agent0ai/agent-zero.
+- Note: Agent Zero also offers a Hacking Edition with modified prompts for cybersecurity tasks. The setup is the same as the regular version, just use the agent0ai/agent-zero:hacking image instead of agent0ai/agent-zero.
 
 2.1. Pull the Agent Zero Docker image:
 - Search for `agent0ai/agent-zero` in Docker Desktop
@@ -95,11 +95,22 @@ The following user guide provides instructions for installing and running Agent 
 - Click the `Run` button next to the `agent0ai/agent-zero` image
 - Open the "Optional settings" menu
 - Set the port to `0` in the second "Host port" field (for automatic port assignment)
+- Map the optional GUI ports if you want remote desktop access: `5901` exposes raw VNC and `6080` serves the browser-based noVNC client
+
+> [!IMPORTANT]
+> The desktop bridges listen on `127.0.0.1` inside the container. Use SSH tunneling or bind host ports to the container's localhost address when forwarding them.
+> The VNC server is password-protected; retrieve the credential from `/var/run/desktop-session/vnc.pass` inside the container or set `DESKTOP_VNC_PASSWORD` before launch to control the value.
 
 Optionally you can map local folders for file persistence:
 - Under "Volumes", configure:
   - Host path: Your chosen directory (e.g., `C:\agent-zero-data`)
   - Container path: `/a0`
+
+> [!TIP]
+> An XFCE desktop session runs on display `:99`. View it through the tunneled ports or automate it via chat with the `desktop_automation` tool—`inspect` returns OCR text alongside the screenshot.
+
+> [!NOTE]
+> LibreOffice (Writer, Calc, Impress, Draw) is preinstalled with English-language help and spell-checking dictionaries. Launch it from the desktop menu or via `desktop_automation` → `launch` (e.g., `libreoffice --writer`) to script office-style tasks.
 
 ![docker port mapping](res/setup/3-docker-port-mapping.png)
 

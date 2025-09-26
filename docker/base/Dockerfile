@@ -1,5 +1,5 @@
-# Use the latest slim version of Kali Linux
-FROM kalilinux/kali-rolling
+# Use the Ubuntu 24.04 LTS base image
+FROM ubuntu:24.04
 
 
 # Set locale to en_US.UTF-8 and timezone to UTC
@@ -23,6 +23,7 @@ RUN bash /ins/install_base_packages1.sh
 RUN bash /ins/install_base_packages2.sh
 RUN bash /ins/install_base_packages3.sh
 RUN bash /ins/install_base_packages4.sh
+RUN bash /ins/install_desktop_stack.sh
 
 # install python after packages to ensure version overriding
 RUN bash /ins/install_python.sh
