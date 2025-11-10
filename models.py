@@ -389,7 +389,12 @@ class LiteLLMChatWrapper(SimpleChatModel):
         return result
 
     def _model_sequence(self) -> List[str]:
-        return list(self._model_candidates)
+        candidates = list(self._model_candidates)
+        last_successful = getattr(self, "_last_successful_model", None)
+        if last_successful and last_successful in candidates:
+            candidates.remove(last_successful)
+            candidates.insert(0, last_successful)
+        return candidates
 
     def _format_model_name(self, candidate: str) -> str:
         candidate = (candidate or "").strip()
