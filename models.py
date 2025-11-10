@@ -334,6 +334,7 @@ class LiteLLMChatWrapper(SimpleChatModel):
             self._model_candidates = [model]
         self._primary_model = self._model_candidates[0]
         self._last_successful_model = self._primary_model
+        self._failed_models: set[str] = set()
         self.model_name = self._format_model_name(self._primary_model)
 
     @property
@@ -389,12 +390,29 @@ class LiteLLMChatWrapper(SimpleChatModel):
         return result
 
     def _model_sequence(self) -> List[str]:
-        candidates = list(self._model_candidates)
+        base_sequence = list(self._model_candidates)
         last_successful = getattr(self, "_last_successful_model", None)
-        if last_successful and last_successful in candidates:
-            candidates.remove(last_successful)
-            candidates.insert(0, last_successful)
-        return candidates
+        failed_models = getattr(self, "_failed_models", set())
+
+        ordered: list[str] = []
+        if last_successful and last_successful in base_sequence:
+            ordered.append(last_successful)
+
+        for candidate in base_sequence:
+            if candidate == last_successful:
+                continue
+            if candidate in failed_models:
+                continue
+            ordered.append(candidate)
+
+        for candidate in base_sequence:
+            if candidate == last_successful:
+                continue
+            if candidate in ordered:
+                continue
+            ordered.append(candidate)
+
+        return ordered
 
     def _format_model_name(self, candidate: str) -> str:
         candidate = (candidate or "").strip()
@@ -428,7 +446,14 @@ class LiteLLMChatWrapper(SimpleChatModel):
 
     def _update_successful_model(self, candidate: str) -> None:
         self._last_successful_model = candidate
+        if hasattr(self, "_failed_models"):
+            self._failed_models.discard(candidate)
         self.model_name = self._format_model_name(candidate)
+
+    def _register_failed_model(self, candidate: str) -> None:
+        if not hasattr(self, "_failed_models"):
+            self._failed_models = set()
+        self._failed_models.add(candidate)
 
     def _call(
         self,
@@ -462,6 +487,7 @@ class LiteLLMChatWrapper(SimpleChatModel):
                 return output["response_delta"]
             except Exception as exc:
                 last_exc = exc
+                self._register_failed_model(candidate)
                 next_model = (
                     self._format_model_name(candidates[idx + 1])
                     if idx < len(candidates) - 1
@@ -513,6 +539,7 @@ class LiteLLMChatWrapper(SimpleChatModel):
                 return
             except Exception as exc:
                 last_exc = exc
+                self._register_failed_model(candidate)
                 if result.response or result.reasoning:
                     raise
                 next_model = (

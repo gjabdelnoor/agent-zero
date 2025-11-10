@@ -16,12 +16,15 @@ class SystemPrompt(Extension):
     ):
         # append main system prompt and tools
         main = get_main_prompt(self.agent)
+        user_preferences = get_user_preferences_prompt(self.agent)
         tools = get_tools_prompt(self.agent)
         mcp_tools = get_mcp_tools_prompt(self.agent)
         secrets_prompt = get_secrets_prompt(self.agent)
         project_prompt = get_project_prompt(self.agent)
 
         system_prompt.append(main)
+        if user_preferences:
+            system_prompt.append(user_preferences)
         system_prompt.append(tools)
         if mcp_tools:
             system_prompt.append(mcp_tools)
@@ -32,7 +35,24 @@ class SystemPrompt(Extension):
 
 
 def get_main_prompt(agent: Agent):
+    override = get_settings().get("system_prompt_main_override", "").strip()
+    if override:
+        return override
     return agent.read_prompt("agent.system.main.md")
+
+
+def get_user_preferences_prompt(agent: Agent) -> str:
+    settings = get_settings()
+    configured = settings.get("system_prompt_user_preferences", "").strip()
+    try:
+        template = agent.read_prompt("agent.system.user-preferences.md")
+    except FileNotFoundError:
+        template = ""
+
+    if configured:
+        return configured
+
+    return template.strip()
 
 
 def get_tools_prompt(agent: Agent):
