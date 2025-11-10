@@ -59,6 +59,12 @@ class Settings(TypedDict):
     agent_profile: str
     agent_memory_subdir: str
     agent_knowledge_subdir: str
+    memory_backend: str
+    neo4j_uri: str
+    neo4j_username: str
+    neo4j_password: str
+    neo4j_database: str
+    neo4j_vector_dimensions: int
 
     memory_recall_enabled: bool
     memory_recall_delayed: bool
@@ -424,7 +430,13 @@ def convert_out(settings: Settings) -> SettingsOutput:
     embed_model_section: SettingsSection = {
         "id": "embed_model",
         "title": "Embedding Model",
-        "description": f"Settings for the embedding model used by Agent Zero.<br><h4>⚠️ No need to change</h4>The default HuggingFace model {default_settings['embed_model_name']} is preloaded and runs locally within the docker container and there's no need to change it unless you have a specific requirements for embedding.",
+        "description": (
+            "Settings for the embedding model used by Agent Zero.<br>"
+            "<h4>Recommended default</h4>"
+            f"The default {default_settings['embed_model_name']} deployment via Chutes is configured "
+            "for high-quality multilingual retrieval. Adjust only if your environment provides a "
+            "different embedding endpoint."
+        ),
         "fields": embed_model_fields,
         "tab": "agent",
     }
@@ -673,6 +685,70 @@ def convert_out(settings: Settings) -> SettingsOutput:
             #     {"value": subdir, "label": subdir}
             #     for subdir in files.get_subdirectories("memory", exclude="embeddings")
             # ],
+        }
+    )
+
+    memory_fields.append(
+        {
+            "id": "memory_backend",
+            "title": "Memory backend",
+            "description": "Select the storage backend for persistent memories.",
+            "type": "select",
+            "value": settings["memory_backend"],
+            "options": [
+                {"value": "neo4j", "label": "Neo4j graph (recommended)"},
+                {"value": "faiss", "label": "FAISS (legacy)"},
+            ],
+        }
+    )
+
+    memory_fields.append(
+        {
+            "id": "neo4j_uri",
+            "title": "Neo4j URI",
+            "description": "Bolt connection string. Leave blank to fall back to NEO4J_URI environment variable or bolt://localhost:7687.",
+            "type": "text",
+            "value": settings["neo4j_uri"],
+        }
+    )
+
+    memory_fields.append(
+        {
+            "id": "neo4j_username",
+            "title": "Neo4j username",
+            "description": "Database username used when connecting to Neo4j.",
+            "type": "text",
+            "value": settings["neo4j_username"],
+        }
+    )
+
+    memory_fields.append(
+        {
+            "id": "neo4j_password",
+            "title": "Neo4j password",
+            "description": "Database password used when connecting to Neo4j.",
+            "type": "password",
+            "value": PASSWORD_PLACEHOLDER if settings["neo4j_password"] else "",
+        }
+    )
+
+    memory_fields.append(
+        {
+            "id": "neo4j_database",
+            "title": "Neo4j database name",
+            "description": "Optional database to target when running in multi-database environments.",
+            "type": "text",
+            "value": settings["neo4j_database"],
+        }
+    )
+
+    memory_fields.append(
+        {
+            "id": "neo4j_vector_dimensions",
+            "title": "Neo4j vector dimensions",
+            "description": "Embedding vector dimensionality for the configured model (Qwen3-Embedding-8B uses 4096).",
+            "type": "number",
+            "value": settings["neo4j_vector_dimensions"],
         }
     )
 
@@ -1445,9 +1521,9 @@ def get_default_settings() -> Settings:
         util_model_rl_requests=0,
         util_model_rl_input=0,
         util_model_rl_output=0,
-        embed_model_provider="huggingface",
-        embed_model_name="sentence-transformers/all-MiniLM-L6-v2",
-        embed_model_api_base="",
+        embed_model_provider="openai",
+        embed_model_name="Qwen/Qwen3-Embedding-8B",
+        embed_model_api_base="https://chutes-qwen-qwen3-embedding-8b.chutes.ai/v1",
         embed_model_kwargs={},
         embed_model_rl_requests=0,
         embed_model_rl_input=0,
@@ -1481,6 +1557,12 @@ def get_default_settings() -> Settings:
         agent_profile="agent0",
         agent_memory_subdir="default",
         agent_knowledge_subdir="custom",
+        memory_backend="neo4j",
+        neo4j_uri="",
+        neo4j_username="",
+        neo4j_password="",
+        neo4j_database="",
+        neo4j_vector_dimensions=4096,
         rfc_auto_docker=True,
         rfc_url="localhost",
         rfc_password="",

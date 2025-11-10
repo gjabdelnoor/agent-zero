@@ -26,6 +26,7 @@ from python.helpers.print_style import PrintStyle
 from . import files
 from langchain_core.documents import Document
 from python.helpers import knowledge_import
+from python.helpers.neo4j_memory import Neo4jMemory, list_memory_subdirs
 from python.helpers.log import Log, LogItem
 from enum import Enum
 from agent import Agent, AgentContext
@@ -61,9 +62,45 @@ class Memory:
 
     index: dict[str, "MyFaiss"] = {}
 
+    class Backend(Enum):
+        FAISS = "faiss"
+        NEO4J = "neo4j"
+
+    @staticmethod
+    def _get_backend(config: AgentConfig) -> "Memory.Backend":
+        backend = getattr(config, "memory_backend", Memory.Backend.FAISS.value)
+        if backend == Memory.Backend.NEO4J.value:
+            return Memory.Backend.NEO4J
+        return Memory.Backend.FAISS
+
     @staticmethod
     async def get(agent: Agent):
         memory_subdir = get_agent_memory_subdir(agent)
+        backend = Memory._get_backend(agent.config)
+        if backend is Memory.Backend.NEO4J:
+            log_item = agent.context.log.log(
+                type="util",
+                heading=f"Initializing Neo4j memory in '/{memory_subdir}'",
+            )
+            try:
+                return await Neo4jMemory.get(
+                    agent,
+                    memory_subdir,
+                    log_item=log_item,
+                    knowledge_subdirs=agent.config.knowledge_subdirs,
+                    preload_knowledge=bool(agent.config.knowledge_subdirs),
+                )
+            except Exception as exc:
+                PrintStyle.error(
+                    f"Neo4j memory initialization failed for '/{memory_subdir}': {exc}. Falling back to FAISS."
+                )
+                log_item.update(
+                    heading=f"Neo4j memory unavailable for '/{memory_subdir}', using FAISS fallback",
+                    temp=False,
+                )
+                agent.config.memory_backend = Memory.Backend.FAISS.value
+                backend = Memory.Backend.FAISS
+
         if Memory.index.get(memory_subdir) is None:
             log_item = agent.context.log.log(
                 type="util",
@@ -94,10 +131,28 @@ class Memory:
         log_item: LogItem | None = None,
         preload_knowledge: bool = True,
     ):
-        if not Memory.index.get(memory_subdir):
-            import initialize
+        import initialize
 
-            agent_config = initialize.initialize_agent()
+        agent_config = initialize.initialize_agent()
+        backend = Memory._get_backend(agent_config)
+
+        if backend is Memory.Backend.NEO4J:
+            try:
+                return await Neo4jMemory.get_for_config(
+                    agent_config,
+                    memory_subdir,
+                    log_item=log_item,
+                    knowledge_subdirs=agent_config.knowledge_subdirs,
+                    preload_knowledge=preload_knowledge,
+                )
+            except Exception:
+                PrintStyle.error(
+                    f"Neo4j memory initialization failed for '/{memory_subdir}'. Falling back to FAISS."
+                )
+                agent_config.memory_backend = Memory.Backend.FAISS.value
+                backend = Memory.Backend.FAISS
+
+        if not Memory.index.get(memory_subdir):
             model_config = agent_config.embeddings_model
             db, _created = Memory.initialize(
                 log_item=log_item,
@@ -116,7 +171,10 @@ class Memory:
     @staticmethod
     async def reload(agent: Agent):
         memory_subdir = agent.config.memory_subdir or "default"
-        if Memory.index.get(memory_subdir):
+        backend = Memory._get_backend(agent.config)
+        if backend is Memory.Backend.NEO4J:
+            await Neo4jMemory.reset(memory_subdir)
+        elif Memory.index.get(memory_subdir):
             del Memory.index[memory_subdir]
         return await Memory.get(agent)
 
@@ -317,8 +375,9 @@ class Memory:
 
         return index
 
-    def get_document_by_id(self, id: str) -> Document | None:
-        return self.db.get_by_ids(id)[0]
+    async def get_document_by_id(self, id: str) -> Document | None:
+        docs = await self.db.aget_by_ids([id])
+        return docs[0] if docs else None
 
     async def search_similarity_threshold(
         self, query: str, limit: int, threshold: float, filter: str = ""
@@ -406,6 +465,12 @@ class Memory:
         ins = await self.db.aadd_documents(documents=docs, ids=ids)  # add updated
         self._save_db()  # persist
         return ins
+
+    async def aget_by_ids(self, ids: Sequence[str]) -> list[Document]:
+        return await self.db.aget_by_ids(ids)
+
+    async def get_all_documents(self) -> dict[str, Document]:
+        return self.db.get_all_docs()
 
     def _save_db(self):
         Memory._save_db_file(self.db, self.memory_subdir)
@@ -516,10 +581,21 @@ def get_existing_memory_subdirs() -> list[str]:
             if files.exists(get_project_meta_folder(project_subdir), "memory", "index.faiss"):
                 subdirs.append(f"projects/{project_subdir}")
 
+        try:
+            import initialize
+
+            agent_config = initialize.initialize_agent()
+            if Memory._get_backend(agent_config) is Memory.Backend.NEO4J:
+                for subdir in list_memory_subdirs(agent_config):
+                    if subdir not in subdirs:
+                        subdirs.append(subdir)
+        except Exception:
+            pass
+
         # Ensure 'default' is always available
         if "default" not in subdirs:
             subdirs.insert(0, "default")
-        
+
         return subdirs
     except Exception as e:
         PrintStyle.error(f"Failed to get memory subdirectories: {str(e)}")

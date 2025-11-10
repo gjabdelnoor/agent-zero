@@ -154,6 +154,8 @@ class MemoryDashboard(ApiHandler):
 
             memories = []
 
+            all_docs = None
+
             if search_query:
                 docs = await memory.search_similarity_threshold(
                     query=search_query,
@@ -164,7 +166,7 @@ class MemoryDashboard(ApiHandler):
                 memories = docs
             else:
                 # If no search query, get all memories from specified area(s)
-                all_docs = memory.db.get_all_docs()
+                all_docs = await memory.get_all_documents()
                 for doc_id, doc in all_docs.items():
                     # Apply area filter if specified
                     if area_filter and doc.metadata.get("area", "") != area_filter:
@@ -193,7 +195,10 @@ class MemoryDashboard(ApiHandler):
             conversation_count = total_memories - knowledge_count
 
             # Get total count of all memories in database (unfiltered)
-            total_db_count = len(memory.db.get_all_docs())
+            if search_query:
+                total_db_count = len(await memory.get_all_documents())
+            else:
+                total_db_count = len(all_docs) if all_docs is not None else len(memories)
 
             return {
                 "success": True,
@@ -244,7 +249,7 @@ class MemoryDashboard(ApiHandler):
 
             memory = await Memory.get_by_subdir(memory_subdir, preload_knowledge=False)
             id = (await memory.update_documents([doc]))[0]
-            doc = memory.get_document_by_id(id)
+            doc = await memory.get_document_by_id(id)
             formatted_doc = self._format_memory_for_dashboard(doc) if doc else None
 
             return {"success": formatted_doc is not None, "memory": formatted_doc}
