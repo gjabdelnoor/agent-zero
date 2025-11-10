@@ -1,3 +1,5 @@
+import os
+
 from agent import AgentConfig
 import models
 from python.helpers import runtime, settings, defer
@@ -82,6 +84,16 @@ def initialize_agent():
         browser_http_headers=current_settings["browser_http_headers"],
         # code_exec params get initialized in _set_runtime_config
         # additional = {},
+    )
+
+    config.neo4j_uri = current_settings.get("neo4j_uri", os.getenv("NEO4J_URI", ""))
+    config.neo4j_username = current_settings.get("neo4j_username", os.getenv("NEO4J_USERNAME", ""))
+    config.neo4j_password = current_settings.get("neo4j_password", os.getenv("NEO4J_PASSWORD", ""))
+    config.neo4j_vector_dimensions = int(
+        current_settings.get(
+            "neo4j_vector_dimensions",
+            os.getenv("NEO4J_VECTOR_DIMENSIONS", config.neo4j_vector_dimensions),
+        )
     )
 
     # update SSH and docker settings
