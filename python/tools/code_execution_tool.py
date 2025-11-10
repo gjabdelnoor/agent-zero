@@ -17,7 +17,7 @@ import re
 CODE_EXEC_TIMEOUTS: dict[str, int] = {
     "first_output_timeout": 30,
     "between_output_timeout": 15,
-    "max_exec_timeout": 180,
+    "max_exec_timeout": 900,
     "dialog_timeout": 5,
 }
 

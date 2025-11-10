@@ -1,4 +1,6 @@
 from agent import AgentConfig
+import re
+
 import models
 from python.helpers import runtime, settings, defer
 from python.helpers.print_style import PrintStyle
@@ -25,6 +27,15 @@ def initialize_agent():
                 result[key] = value
         return result
 
+    def _parse_fallbacks(raw_value):
+        if not raw_value:
+            return []
+        if isinstance(raw_value, list):
+            candidates = raw_value
+        else:
+            candidates = re.split(r"[\n,]+", str(raw_value))
+        return [candidate.strip() for candidate in candidates if candidate and candidate.strip()]
+
     # chat model from user settings
     chat_llm = models.ModelConfig(
         type=models.ModelType.CHAT,
@@ -37,6 +48,7 @@ def initialize_agent():
         limit_input=current_settings["chat_model_rl_input"],
         limit_output=current_settings["chat_model_rl_output"],
         kwargs=_normalize_model_kwargs(current_settings["chat_model_kwargs"]),
+        fallbacks=_parse_fallbacks(current_settings.get("chat_model_fallbacks", "")),
     )
 
     # utility model from user settings
@@ -50,6 +62,7 @@ def initialize_agent():
         limit_input=current_settings["util_model_rl_input"],
         limit_output=current_settings["util_model_rl_output"],
         kwargs=_normalize_model_kwargs(current_settings["util_model_kwargs"]),
+        fallbacks=_parse_fallbacks(current_settings.get("util_model_fallbacks", "")),
     )
     # embedding model from user settings
     embedding_llm = models.ModelConfig(
@@ -68,6 +81,7 @@ def initialize_agent():
         api_base=current_settings["browser_model_api_base"],
         vision=current_settings["browser_model_vision"],
         kwargs=_normalize_model_kwargs(current_settings["browser_model_kwargs"]),
+        fallbacks=_parse_fallbacks(current_settings.get("browser_model_fallbacks", "")),
     )
     # agent configuration
     config = AgentConfig(
