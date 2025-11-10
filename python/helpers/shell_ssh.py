@@ -99,7 +99,7 @@ class SSHInteractiveSession:
         self.last_command = command.encode()
         self.trimmed_command_length = 0
         self.shell.send(self.last_command)
-
+        
     async def read_output(
         self, timeout: float = 0, reset_full_output: bool = False
     ) -> Tuple[str, str]:
