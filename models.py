@@ -2,6 +2,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 import logging
 import os
+from dataclasses import dataclass, field, replace
+from enum import Enum
 from typing import (
     Any,
     Awaitable,
@@ -26,6 +28,8 @@ from python.helpers.providers import get_provider_config
 from python.helpers.rate_limiter import RateLimiter
 from python.helpers.tokens import approximate_tokens
 from python.helpers import dirty_json, browser_use_monkeypatch
+
+logger = logging.getLogger(__name__)
 
 from langchain_core.language_models.chat_models import SimpleChatModel
 from langchain_core.outputs.chat_generation import ChatGenerationChunk
@@ -76,6 +80,7 @@ class ModelConfig:
     limit_input: int = 0
     limit_output: int = 0
     vision: bool = False
+    fallbacks: list[str] = field(default_factory=list)
     kwargs: dict = field(default_factory=dict)
 
     def build_kwargs(self):
@@ -83,6 +88,19 @@ class ModelConfig:
         if self.api_base and "api_base" not in kwargs:
             kwargs["api_base"] = self.api_base
         return kwargs
+
+    def candidate_sequence(self) -> list[str]:
+        seen: set[str] = set()
+        sequence: list[str] = []
+        for candidate in [self.name, *self.fallbacks]:
+            clean = (candidate or "").strip()
+            if clean and clean not in seen:
+                seen.add(clean)
+                sequence.append(clean)
+        return sequence
+
+    def with_name(self, name: str) -> "ModelConfig":
+        return replace(self, name=name)
 
 
 class ChatChunk(TypedDict):
@@ -309,6 +327,15 @@ class LiteLLMChatWrapper(SimpleChatModel):
         super().__init__(model_name=model_value, provider=provider, kwargs=kwargs)  # type: ignore
         # Set A0 model config as instance attribute after parent init
         self.a0_model_conf = model_config
+        self._model_candidates = (
+            model_config.candidate_sequence() if model_config else [model]
+        )
+        if not self._model_candidates:
+            self._model_candidates = [model]
+        self._primary_model = self._model_candidates[0]
+        self._last_successful_model = self._primary_model
+        self._failed_models: set[str] = set()
+        self.model_name = self._format_model_name(self._primary_model)
 
     @property
     def _llm_type(self) -> str:
@@ -362,6 +389,72 @@ class LiteLLMChatWrapper(SimpleChatModel):
             result.append(message_dict)
         return result
 
+    def _model_sequence(self) -> List[str]:
+        base_sequence = list(self._model_candidates)
+        last_successful = getattr(self, "_last_successful_model", None)
+        failed_models = getattr(self, "_failed_models", set())
+
+        ordered: list[str] = []
+        if last_successful and last_successful in base_sequence:
+            ordered.append(last_successful)
+
+        for candidate in base_sequence:
+            if candidate == last_successful:
+                continue
+            if candidate in failed_models:
+                continue
+            ordered.append(candidate)
+
+        for candidate in base_sequence:
+            if candidate == last_successful:
+                continue
+            if candidate in ordered:
+                continue
+            ordered.append(candidate)
+
+        return ordered
+
+    def _format_model_name(self, candidate: str) -> str:
+        candidate = (candidate or "").strip()
+        if not candidate:
+            return self.model_name
+        return f"{self.provider}/{candidate}" if self.provider else candidate
+
+    def _candidate_config(self, candidate: str) -> Optional[ModelConfig]:
+        if not self.a0_model_conf:
+            return None
+        if candidate == self.a0_model_conf.name:
+            return self.a0_model_conf
+        return self.a0_model_conf.with_name(candidate)
+
+    def _log_fallback(
+        self, failed_model: str, exc: Exception, next_model: Optional[str]
+    ) -> None:
+        if next_model:
+            logger.warning(
+                "Model %s failed (%s). Falling back to %s",
+                failed_model,
+                getattr(exc, "status_code", repr(exc)),
+                next_model,
+            )
+        else:
+            logger.warning(
+                "Model %s failed (%s) and no fallback model is available",
+                failed_model,
+                getattr(exc, "status_code", repr(exc)),
+            )
+
+    def _update_successful_model(self, candidate: str) -> None:
+        self._last_successful_model = candidate
+        if hasattr(self, "_failed_models"):
+            self._failed_models.discard(candidate)
+        self.model_name = self._format_model_name(candidate)
+
+    def _register_failed_model(self, candidate: str) -> None:
+        if not hasattr(self, "_failed_models"):
+            self._failed_models = set()
+        self._failed_models.add(candidate)
+
     def _call(
         self,
         messages: List[BaseMessage],
@@ -369,22 +462,45 @@ class LiteLLMChatWrapper(SimpleChatModel):
         run_manager: Optional[CallbackManagerForLLMRun] = None,
         **kwargs: Any,
     ) -> str:
-        import asyncio
-
         msgs = self._convert_messages(messages)
+        call_kwargs: dict[str, Any] = {**self.kwargs, **kwargs}
+        last_exc: Exception | None = None
+        candidates = self._model_sequence()
 
-        # Apply rate limiting if configured
-        apply_rate_limiter_sync(self.a0_model_conf, str(msgs))
+        for idx, candidate in enumerate(candidates):
+            candidate_name = self._format_model_name(candidate)
+            candidate_config = self._candidate_config(candidate)
 
-        # Call the model
-        resp = completion(
-            model=self.model_name, messages=msgs, stop=stop, **{**self.kwargs, **kwargs}
-        )
+            apply_rate_limiter_sync(candidate_config, str(msgs))
 
-        # Parse output
-        parsed = _parse_chunk(resp)
-        output = ChatGenerationResult(parsed).output()
-        return output["response_delta"]
+            result = ChatGenerationResult()
+            try:
+                resp = completion(
+                    model=candidate_name,
+                    messages=msgs,
+                    stop=stop,
+                    **call_kwargs,
+                )
+                parsed = _parse_chunk(resp)
+                output = result.add_chunk(parsed)
+                self._update_successful_model(candidate)
+                return output["response_delta"]
+            except Exception as exc:
+                last_exc = exc
+                self._register_failed_model(candidate)
+                next_model = (
+                    self._format_model_name(candidates[idx + 1])
+                    if idx < len(candidates) - 1
+                    else None
+                )
+                self._log_fallback(candidate_name, exc, next_model)
+                if next_model:
+                    continue
+                raise
+
+        if last_exc:
+            raise last_exc
+        return ""
 
     def _stream(
         self,
@@ -393,31 +509,51 @@ class LiteLLMChatWrapper(SimpleChatModel):
         run_manager: Optional[CallbackManagerForLLMRun] = None,
         **kwargs: Any,
     ) -> Iterator[ChatGenerationChunk]:
-        import asyncio
-
         msgs = self._convert_messages(messages)
+        call_kwargs: dict[str, Any] = {**self.kwargs, **kwargs}
+        candidates = self._model_sequence()
+        last_exc: Exception | None = None
 
-        # Apply rate limiting if configured
-        apply_rate_limiter_sync(self.a0_model_conf, str(msgs))
+        for idx, candidate in enumerate(candidates):
+            candidate_name = self._format_model_name(candidate)
+            candidate_config = self._candidate_config(candidate)
+            apply_rate_limiter_sync(candidate_config, str(msgs))
 
-        result = ChatGenerationResult()
+            result = ChatGenerationResult()
+            try:
+                for chunk in completion(
+                    model=candidate_name,
+                    messages=msgs,
+                    stream=True,
+                    stop=stop,
+                    **call_kwargs,
+                ):
+                    parsed = _parse_chunk(chunk)
+                    output = result.add_chunk(parsed)
 
-        for chunk in completion(
-            model=self.model_name,
-            messages=msgs,
-            stream=True,
-            stop=stop,
-            **{**self.kwargs, **kwargs},
-        ):
-            # parse chunk
-            parsed = _parse_chunk(chunk) # chunk parsing
-            output = result.add_chunk(parsed) # chunk processing
-
-            # Only yield chunks with non-None content
-            if output["response_delta"]:
-                yield ChatGenerationChunk(
-                    message=AIMessageChunk(content=output["response_delta"])
+                    if output["response_delta"]:
+                        yield ChatGenerationChunk(
+                            message=AIMessageChunk(content=output["response_delta"])
+                        )
+                self._update_successful_model(candidate)
+                return
+            except Exception as exc:
+                last_exc = exc
+                self._register_failed_model(candidate)
+                if result.response or result.reasoning:
+                    raise
+                next_model = (
+                    self._format_model_name(candidates[idx + 1])
+                    if idx < len(candidates) - 1
+                    else None
                 )
+                self._log_fallback(candidate_name, exc, next_model)
+                if next_model:
+                    continue
+                raise
+
+        if last_exc:
+            raise last_exc
 
     async def _astream(
         self,
@@ -427,29 +563,50 @@ class LiteLLMChatWrapper(SimpleChatModel):
         **kwargs: Any,
     ) -> AsyncIterator[ChatGenerationChunk]:
         msgs = self._convert_messages(messages)
+        call_kwargs: dict[str, Any] = {**self.kwargs, **kwargs}
+        candidates = self._model_sequence()
+        last_exc: Exception | None = None
 
-        # Apply rate limiting if configured
-        await apply_rate_limiter(self.a0_model_conf, str(msgs))
+        for idx, candidate in enumerate(candidates):
+            candidate_name = self._format_model_name(candidate)
+            candidate_config = self._candidate_config(candidate)
+            await apply_rate_limiter(candidate_config, str(msgs))
 
-        result = ChatGenerationResult()
-
-        response = await acompletion(
-            model=self.model_name,
-            messages=msgs,
-            stream=True,
-            stop=stop,
-            **{**self.kwargs, **kwargs},
-        )
-        async for chunk in response:  # type: ignore
-            # parse chunk
-            parsed = _parse_chunk(chunk) # chunk parsing
-            output = result.add_chunk(parsed) # chunk processing
-
-            # Only yield chunks with non-None content
-            if output["response_delta"]:
-                yield ChatGenerationChunk(
-                    message=AIMessageChunk(content=output["response_delta"])
+            result = ChatGenerationResult()
+            try:
+                response = await acompletion(
+                    model=candidate_name,
+                    messages=msgs,
+                    stream=True,
+                    stop=stop,
+                    **call_kwargs,
                 )
+                async for chunk in response:  # type: ignore
+                    parsed = _parse_chunk(chunk)
+                    output = result.add_chunk(parsed)
+
+                    if output["response_delta"]:
+                        yield ChatGenerationChunk(
+                            message=AIMessageChunk(content=output["response_delta"])
+                        )
+                self._update_successful_model(candidate)
+                return
+            except Exception as exc:
+                last_exc = exc
+                if result.response or result.reasoning:
+                    raise
+                next_model = (
+                    self._format_model_name(candidates[idx + 1])
+                    if idx < len(candidates) - 1
+                    else None
+                )
+                self._log_fallback(candidate_name, exc, next_model)
+                if next_model:
+                    continue
+                raise
+
+        if last_exc:
+            raise last_exc
 
     async def unified_call(
         self,
@@ -477,87 +634,114 @@ class LiteLLMChatWrapper(SimpleChatModel):
 
         # convert to litellm format
         msgs_conv = self._convert_messages(messages)
-
-        # Apply rate limiting if configured
-        limiter = await apply_rate_limiter(
-            self.a0_model_conf, str(msgs_conv), rate_limiter_callback
-        )
-
-        # Prepare call kwargs and retry config (strip A0-only params before calling LiteLLM)
         call_kwargs: dict[str, Any] = {**self.kwargs, **kwargs}
         max_retries: int = int(call_kwargs.pop("a0_retry_attempts", 2))
         retry_delay_s: float = float(call_kwargs.pop("a0_retry_delay_seconds", 1.5))
-        stream = reasoning_callback is not None or response_callback is not None or tokens_callback is not None
+        stream = (
+            reasoning_callback is not None
+            or response_callback is not None
+            or tokens_callback is not None
+        )
 
-        # results
-        result = ChatGenerationResult()
+        candidates = self._model_sequence()
+        last_exc: Exception | None = None
 
-        attempt = 0
-        while True:
-            got_any_chunk = False
-            try:
-                # call model
-                _completion = await acompletion(
-                    model=self.model_name,
-                    messages=msgs_conv,
-                    stream=stream,
-                    **call_kwargs,
-                )
+        for idx, candidate in enumerate(candidates):
+            candidate_name = self._format_model_name(candidate)
+            candidate_config = self._candidate_config(candidate)
+            limiter = await apply_rate_limiter(
+                candidate_config, str(msgs_conv), rate_limiter_callback
+            )
 
-                if stream:
-                    # iterate over chunks
-                    async for chunk in _completion:  # type: ignore
-                        got_any_chunk = True
-                        # parse chunk
-                        parsed = _parse_chunk(chunk)
+            result = ChatGenerationResult()
+            attempt = 0
+            while True:
+                got_any_chunk = False
+                try:
+                    _completion = await acompletion(
+                        model=candidate_name,
+                        messages=msgs_conv,
+                        stream=stream,
+                        **call_kwargs,
+                    )
+
+                    if stream:
+                        async for chunk in _completion:  # type: ignore
+                            got_any_chunk = True
+                            parsed = _parse_chunk(chunk)
+                            output = result.add_chunk(parsed)
+
+                            if output["reasoning_delta"]:
+                                if reasoning_callback:
+                                    await reasoning_callback(
+                                        output["reasoning_delta"], result.reasoning
+                                    )
+                                if tokens_callback:
+                                    await tokens_callback(
+                                        output["reasoning_delta"],
+                                        approximate_tokens(output["reasoning_delta"]),
+                                    )
+                                if limiter:
+                                    limiter.add(
+                                        output=approximate_tokens(
+                                            output["reasoning_delta"]
+                                        )
+                                    )
+                            if output["response_delta"]:
+                                if response_callback:
+                                    await response_callback(
+                                        output["response_delta"], result.response
+                                    )
+                                if tokens_callback:
+                                    await tokens_callback(
+                                        output["response_delta"],
+                                        approximate_tokens(output["response_delta"]),
+                                    )
+                                if limiter:
+                                    limiter.add(
+                                        output=approximate_tokens(
+                                            output["response_delta"]
+                                        )
+                                    )
+                    else:
+                        parsed = _parse_chunk(_completion)
                         output = result.add_chunk(parsed)
-
-                        # collect reasoning delta and call callbacks
-                        if output["reasoning_delta"]:
-                            if reasoning_callback:
-                                await reasoning_callback(output["reasoning_delta"], result.reasoning)
-                            if tokens_callback:
-                                await tokens_callback(
-                                    output["reasoning_delta"],
-                                    approximate_tokens(output["reasoning_delta"]),
+                        if limiter:
+                            if output["response_delta"]:
+                                limiter.add(
+                                    output=approximate_tokens(output["response_delta"])
                                 )
-                            # Add output tokens to rate limiter if configured
-                            if limiter:
-                                limiter.add(output=approximate_tokens(output["reasoning_delta"]))
-                        # collect response delta and call callbacks
-                        if output["response_delta"]:
-                            if response_callback:
-                                await response_callback(output["response_delta"], result.response)
-                            if tokens_callback:
-                                await tokens_callback(
-                                    output["response_delta"],
-                                    approximate_tokens(output["response_delta"]),
+                            if output["reasoning_delta"]:
+                                limiter.add(
+                                    output=approximate_tokens(output["reasoning_delta"])
                                 )
-                            # Add output tokens to rate limiter if configured
-                            if limiter:
-                                limiter.add(output=approximate_tokens(output["response_delta"]))
 
-                # non-stream response
-                else:
-                    parsed = _parse_chunk(_completion)
-                    output = result.add_chunk(parsed)
-                    if limiter:
-                        if output["response_delta"]:
-                            limiter.add(output=approximate_tokens(output["response_delta"]))
-                        if output["reasoning_delta"]:
-                            limiter.add(output=approximate_tokens(output["reasoning_delta"]))
+                    self._update_successful_model(candidate)
+                    return result.response, result.reasoning
 
-                # Successful completion of stream
-                return result.response, result.reasoning
+                except Exception as e:
+                    import asyncio
 
-            except Exception as e:
-                import asyncio
-                
-                # Retry only if no chunks received and error is transient
-                if got_any_chunk or not _is_transient_litellm_error(e) or attempt >= max_retries:
-                    raise
-                attempt += 1
-                await asyncio.sleep(retry_delay_s)
+                    if got_any_chunk or not _is_transient_litellm_error(e) or attempt >= max_retries:
+                        last_exc = e
+                        break
+                    attempt += 1
+                    await asyncio.sleep(retry_delay_s)
+
+            next_model = (
+                self._format_model_name(candidates[idx + 1])
+                if idx < len(candidates) - 1
+                else None
+            )
+            if last_exc:
+                self._log_fallback(candidate_name, last_exc, next_model)
+            if next_model:
+                continue
+            if last_exc:
+                raise last_exc
+
+        if last_exc:
+            raise last_exc
 
 
 class AsyncAIChatReplacement:

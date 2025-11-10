@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import html
 import json
 import os
 import re
@@ -20,6 +21,7 @@ class Settings(TypedDict):
 
     chat_model_provider: str
     chat_model_name: str
+    chat_model_fallbacks: str
     chat_model_api_base: str
     chat_model_kwargs: dict[str, Any]
     chat_model_ctx_length: int
@@ -31,6 +33,7 @@ class Settings(TypedDict):
 
     util_model_provider: str
     util_model_name: str
+    util_model_fallbacks: str
     util_model_api_base: str
     util_model_kwargs: dict[str, Any]
     util_model_ctx_length: int
@@ -48,6 +51,7 @@ class Settings(TypedDict):
 
     browser_model_provider: str
     browser_model_name: str
+    browser_model_fallbacks: str
     browser_model_api_base: str
     browser_model_vision: bool
     browser_model_rl_requests: int
@@ -59,6 +63,8 @@ class Settings(TypedDict):
     agent_profile: str
     agent_memory_subdir: str
     agent_knowledge_subdir: str
+    system_prompt_main_override: str
+    system_prompt_user_preferences: str
     memory_backend: str
     neo4j_uri: str
     neo4j_username: str
@@ -196,6 +202,16 @@ def convert_out(settings: Settings) -> SettingsOutput:
 
     chat_model_fields.append(
         {
+            "id": "chat_model_fallbacks",
+            "title": "Fallback model name(s)",
+            "description": "Optional backup models from the same provider. Provide one per line or comma separated; fallbacks are used if the primary model returns an API error.",
+            "type": "text",
+            "value": settings["chat_model_fallbacks"],
+        }
+    )
+
+    chat_model_fields.append(
+        {
             "id": "chat_model_api_base",
             "title": "Chat model API base URL",
             "description": "API base URL for main chat model. Leave empty for default. Only relevant for Azure, local and custom (other) providers.",
@@ -304,6 +320,16 @@ def convert_out(settings: Settings) -> SettingsOutput:
             "description": "Exact name of model from selected provider",
             "type": "text",
             "value": settings["util_model_name"],
+        }
+    )
+
+    util_model_fields.append(
+        {
+            "id": "util_model_fallbacks",
+            "title": "Utility fallback model name(s)",
+            "description": "Optional backup models from the same provider. Provide one per line or comma separated.",
+            "type": "text",
+            "value": settings["util_model_fallbacks"],
         }
     )
 
@@ -460,6 +486,16 @@ def convert_out(settings: Settings) -> SettingsOutput:
             "description": "Exact name of model from selected provider",
             "type": "text",
             "value": settings["browser_model_name"],
+        }
+    )
+
+    browser_model_fields.append(
+        {
+            "id": "browser_model_fallbacks",
+            "title": "Web Browser fallback model name(s)",
+            "description": "Optional backup models from the same provider. Provide one per line or comma separated.",
+            "type": "text",
+            "value": settings["browser_model_fallbacks"],
         }
     )
 
@@ -669,6 +705,56 @@ def convert_out(settings: Settings) -> SettingsOutput:
         "title": "Agent Config",
         "description": "Agent parameters.",
         "fields": agent_fields,
+        "tab": "agent",
+    }
+
+    system_prompt_fields: list[SettingsField] = []
+
+    try:
+        main_prompt_default = files.read_file("prompts/agent.system.main.md")
+    except FileNotFoundError:
+        main_prompt_default = ""
+    main_prompt_preview = html.escape(main_prompt_default)
+    system_prompt_fields.append(
+        {
+            "id": "system_prompt_main_override",
+            "title": "Main system prompt",
+            "description": (
+                "Customize the core instructions for Agent Zero. Leave empty to use the built-in prompt. "
+                "Clear the field and save to revert to the default." "<details><summary>View default prompt</summary>"
+                f"<pre>{main_prompt_preview}</pre></details>"
+            ),
+            "type": "textarea",
+            "value": settings["system_prompt_main_override"],
+            "style": "height: 18em",
+        }
+    )
+
+    try:
+        user_pref_default = files.read_file("prompts/agent.system.user-preferences.md")
+    except FileNotFoundError:
+        user_pref_default = ""
+    user_pref_preview = html.escape(user_pref_default)
+    system_prompt_fields.append(
+        {
+            "id": "system_prompt_user_preferences",
+            "title": "User preferences prompt",
+            "description": (
+                "Add personal preferences, tone or policies that should always be appended after the main system prompt. "
+                "This prompt is applied for every profile." "<details><summary>Default template</summary>"
+                f"<pre>{user_pref_preview}</pre></details>"
+            ),
+            "type": "textarea",
+            "value": settings["system_prompt_user_preferences"],
+            "style": "height: 14em",
+        }
+    )
+
+    system_prompt_section: SettingsSection = {
+        "id": "system_prompts",
+        "title": "System Prompts",
+        "description": "Configure the base and user-specific system prompts used for every conversation.",
+        "fields": system_prompt_fields,
         "tab": "agent",
     }
 
@@ -1331,6 +1417,7 @@ def convert_out(settings: Settings) -> SettingsOutput:
     result: SettingsOutput = {
         "sections": [
             agent_section,
+            system_prompt_section,
             chat_model_section,
             util_model_section,
             browser_model_section,
@@ -1504,6 +1591,7 @@ def get_default_settings() -> Settings:
         version=_get_version(),
         chat_model_provider="openrouter",
         chat_model_name="openai/gpt-4.1",
+        chat_model_fallbacks="",
         chat_model_api_base="",
         chat_model_kwargs={"temperature": "0"},
         chat_model_ctx_length=100000,
@@ -1514,6 +1602,7 @@ def get_default_settings() -> Settings:
         chat_model_rl_output=0,
         util_model_provider="openrouter",
         util_model_name="openai/gpt-4.1-mini",
+        util_model_fallbacks="",
         util_model_api_base="",
         util_model_ctx_length=100000,
         util_model_ctx_input=0.7,
@@ -1529,6 +1618,7 @@ def get_default_settings() -> Settings:
         embed_model_rl_input=0,
         browser_model_provider="openrouter",
         browser_model_name="openai/gpt-4.1",
+        browser_model_fallbacks="",
         browser_model_api_base="",
         browser_model_vision=True,
         browser_model_rl_requests=0,
@@ -1557,6 +1647,8 @@ def get_default_settings() -> Settings:
         agent_profile="agent0",
         agent_memory_subdir="default",
         agent_knowledge_subdir="custom",
+        system_prompt_main_override="",
+        system_prompt_user_preferences="",
         memory_backend="neo4j",
         neo4j_uri="",
         neo4j_username="",
