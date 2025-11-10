@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import shlex
 import time
 from python.helpers.tool import Tool, Response
-from python.helpers import files, rfc_exchange
+from python.helpers import files, rfc_exchange, projects
 from python.helpers.print_style import PrintStyle
 from python.helpers.shell_local import LocalInteractiveSession
 from python.helpers.shell_ssh import SSHInteractiveSession
@@ -146,9 +146,10 @@ class CodeExecution(Tool):
                     self.agent.config.code_exec_ssh_port,
                     self.agent.config.code_exec_ssh_user,
                     pswd,
+                    cwd=self.get_cwd(),
                 )
             else:
-                shell = LocalInteractiveSession()
+                shell = LocalInteractiveSession(cwd=self.get_cwd())
 
             shells[session] = ShellWrap(id=session, session=shell, running=False)
             await shell.connect()
@@ -260,7 +261,7 @@ class CodeExecution(Tool):
         got_output = False
 
         # if prefix, log right away
-        if prefix and hasattr(self, 'log'):
+        if prefix:
             self.log.update(content=prefix)
 
         while True:
@@ -279,8 +280,7 @@ class CodeExecution(Tool):
                 truncated_output = self.fix_full_output(full_output)
                 self.set_progress(truncated_output)
                 heading = self.get_heading_from_output(truncated_output, 0)
-                if hasattr(self, 'log'):
-                    self.log.update(content=prefix + truncated_output, heading=heading)
+                self.log.update(content=prefix + truncated_output, heading=heading)
                 last_output_time = now
                 got_output = True
 
@@ -299,8 +299,7 @@ class CodeExecution(Tool):
                             heading = self.get_heading_from_output(
                                 "\n".join(last_lines), idx + 1, True
                             )
-                            if hasattr(self, 'log'):
-                                self.log.update(heading=heading)
+                            self.log.update(heading=heading)
                             self.mark_session_idle(session)
                             return truncated_output
 
@@ -314,8 +313,7 @@ class CodeExecution(Tool):
                     response = truncated_output + "\n\n" + response
                 PrintStyle.warning(sysinfo)
                 heading = self.get_heading_from_output(truncated_output, 0)
-                if hasattr(self, 'log'):
-                    self.log.update(content=prefix + response, heading=heading)
+                self.log.update(content=prefix + response, heading=heading)
                 return response
 
             # Waiting for first output
@@ -326,8 +324,7 @@ class CodeExecution(Tool):
                     )
                     response = self.agent.read_prompt("fw.code.info.md", info=sysinfo)
                     PrintStyle.warning(sysinfo)
-                    if hasattr(self, 'log'):
-                        self.log.update(content=prefix + response)
+                    self.log.update(content=prefix + response)
                     return response
             else:
                 # Waiting for more output after first output
@@ -340,8 +337,7 @@ class CodeExecution(Tool):
                         response = truncated_output + "\n\n" + response
                     PrintStyle.warning(sysinfo)
                     heading = self.get_heading_from_output(truncated_output, 0)
-                    if hasattr(self, 'log'):
-                        self.log.update(content=prefix + response, heading=heading)
+                    self.log.update(content=prefix + response, heading=heading)
                     return response
 
                 # potential dialog detection
@@ -369,10 +365,9 @@ class CodeExecution(Tool):
                                 heading = self.get_heading_from_output(
                                     truncated_output, 0
                                 )
-                                if hasattr(self, 'log'):
-                                    self.log.update(
-                                        content=prefix + response, heading=heading
-                                    )
+                                self.log.update(
+                                    content=prefix + response, heading=heading
+                                )
                                 return response
 
     async def handle_running_session(
@@ -424,8 +419,7 @@ class CodeExecution(Tool):
         if truncated_output:
             response = truncated_output + "\n\n" + response
         PrintStyle(font_color="#FFA500", bold=True).print(response)
-        if hasattr(self, 'log'):
-            self.log.update(content=prefix + response, heading=heading)
+        self.log.update(content=prefix + response, heading=heading)
         return response
     
     def mark_session_idle(self, session: int = 0):
@@ -449,8 +443,7 @@ class CodeExecution(Tool):
         response = self.agent.read_prompt(
             "fw.code.info.md", info=self.agent.read_prompt("fw.code.reset.md")
         )
-        if hasattr(self, 'log'):
-            self.log.update(content=response)
+        self.log.update(content=response)
         return response
 
     def get_heading_from_output(self, output: str, skip_lines=0, done=False):
@@ -477,3 +470,14 @@ class CodeExecution(Tool):
         output = "\n".join(line.strip() for line in output.splitlines())
         output = truncate_text_agent(agent=self.agent, output=output, threshold=1000000) # ~1MB, larger outputs should be dumped to file, not read from terminal
         return output
+
+    def get_cwd(self):
+        project_name = projects.get_context_project_name(self.agent.context)
+        if not project_name:
+            return None
+        project_path = projects.get_project_folder(project_name)
+        normalized = files.normalize_a0_path(project_path)
+        return normalized
+        
+
+        

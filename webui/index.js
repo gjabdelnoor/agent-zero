@@ -9,21 +9,27 @@ import { store as preferencesStore } from "/components/sidebar/bottom/preference
 import { store as inputStore } from "/components/chat/input/input-store.js";
 import { store as chatsStore } from "/components/sidebar/chats/chats-store.js";
 import { store as tasksStore } from "/components/sidebar/tasks/tasks-store.js";
+import { store as chatTopStore } from "/components/chat/top-section/chat-top-store.js";
 
 globalThis.fetchApi = api.fetchApi; // TODO - backward compatibility for non-modular scripts, remove once refactored to alpine
 
 // Declare variables for DOM elements, they will be assigned on DOMContentLoaded
-let leftPanel, rightPanel, container, chatInput, chatHistory, sendButton, inputSection, statusSection, progressBar, autoScrollSwitch, timeDate;
+let leftPanel,
+  rightPanel,
+  container,
+  chatInput,
+  chatHistory,
+  sendButton,
+  inputSection,
+  statusSection,
+  progressBar,
+  autoScrollSwitch,
+  timeDate;
 
 let autoScroll = true;
-let context = "";
+let context = null;
 globalThis.resetCounter = 0; // Used by stores and getChatBasedId
 let skipOneSpeech = false;
-let connectionStatus = undefined; // undefined = not checked yet, true = connected, false = disconnected
-
-export function getAutoScroll() {
-  return autoScroll;
-}
 
 // Sidebar toggle logic is now handled by sidebar-store.js
 
@@ -105,7 +111,7 @@ export async function sendMessage() {
 }
 globalThis.sendMessage = sendMessage;
 
-function toastFetchError(text, error) {
+export function toastFetchError(text, error) {
   console.error(text, error);
   // Use new frontend error notification system (async, but we don't need to wait)
   const errorMessage = error?.message || error?.toString() || "Unknown error";
@@ -147,7 +153,14 @@ export function updateChatInput(text) {
   console.log("Updated chat input value:", chatInputEl.value);
 }
 
-function updateUserTime() {
+async function updateUserTime() {
+  let userTimeElement = document.getElementById("time-date");
+
+  while (!userTimeElement) {
+    await sleep(100);
+    userTimeElement = document.getElementById("time-date");
+  }
+
   const now = new Date();
   const hours = now.getHours();
   const minutes = now.getMinutes();
@@ -165,7 +178,6 @@ function updateUserTime() {
   const dateString = now.toLocaleDateString(undefined, options);
 
   // Update the HTML
-  const userTimeElement = document.getElementById("time-date");
   userTimeElement.innerHTML = `${timeString}<br><span id="user-date">${dateString}</span>`;
 }
 
@@ -175,7 +187,7 @@ setInterval(updateUserTime, 1000);
 function setMessage(id, type, heading, content, temp, kvps = null) {
   const result = msgs.setMessage(id, type, heading, content, temp, kvps);
   const chatHistoryEl = document.getElementById("chat-history");
-  if (autoScroll && chatHistoryEl) {
+  if (preferencesStore.autoScroll && chatHistoryEl) {
     chatHistoryEl.scrollTop = chatHistoryEl.scrollHeight;
   }
   return result;
@@ -220,26 +232,29 @@ function generateGUID() {
   });
 }
 
-function getConnectionStatus() {
-  return connectionStatus;
+export function getConnectionStatus() {
+  return chatTopStore.connected;
 }
 globalThis.getConnectionStatus = getConnectionStatus;
 
 function setConnectionStatus(connected) {
-  connectionStatus = connected;
-  // Broadcast connection status without touching Alpine directly
-  try {
-    window.dispatchEvent(new CustomEvent("connection-status", { detail: { connected } }));
-  } catch (_e) {
-    // no-op
-  }
+  chatTopStore.connected = connected;
+  // connectionStatus = connected;
+  // // Broadcast connection status without touching Alpine directly
+  // try {
+  //   window.dispatchEvent(
+  //     new CustomEvent("connection-status", { detail: { connected } })
+  //   );
+  // } catch (_e) {
+  //   // no-op
+  // }
 }
 
 let lastLogVersion = 0;
 let lastLogGuid = "";
 let lastSpokenNo = 0;
 
-async function poll() {
+export async function poll() {
   let updated = false;
   try {
     // Get timezone from navigator
@@ -259,8 +274,19 @@ async function poll() {
       return false;
     }
 
-    if (!context) setContext(response.context);
-    if (response.context != context) return; //skip late polls after context change
+    // deselect chat if it is requested by the backend
+    if (response.deselect_chat) {
+      chatsStore.deselectChat();
+      return
+    }
+
+    if (
+      response.context != context &&
+      !(response.context === null && context === null) &&
+      context !== null
+    ) {
+      return;
+    }
 
     // if the chat has been reset, restart this poll as it may have been called with incorrect log_from
     if (lastLogGuid != response.log_guid) {
@@ -314,23 +340,36 @@ async function poll() {
     if (context) {
       // Update selection in both stores
       chatsStore.setSelected(context);
-      
-      // Check if this context exists in the chats list
-      const contextExists = chatsStore.contains(context);
 
-      // If it doesn't exist in the chats list, try to select the first chat
-      if (!contextExists && chatsStore.contexts.length > 0) {
-        const firstChatId = chatsStore.firstId();
-        if (firstChatId) {
-          setContext(firstChatId);
-          chatsStore.setSelected(firstChatId);
+      const contextInChats = chatsStore.contains(context);
+      const contextInTasks = tasksStore.contains(context);
+
+      if (contextInTasks) {
+        tasksStore.setSelected(context);
+      }
+
+      if (!contextInChats && !contextInTasks) {
+        if (chatsStore.contexts.length > 0) {
+          // If it doesn't exist in the list but other contexts do, fall back to the first
+          const firstChatId = chatsStore.firstId();
+          if (firstChatId) {
+            setContext(firstChatId);
+            chatsStore.setSelected(firstChatId);
+          }
+        } else if (typeof deselectChat === "function") {
+          // No contexts remain – clear state so the welcome screen can surface
+          deselectChat();
         }
       }
-      
-      tasksStore.setSelected(context);
     } else {
-      // No context selected, try to select the first available item
-      if (contexts.length > 0) {
+      const welcomeStore =
+        globalThis.Alpine && typeof globalThis.Alpine.store === "function"
+          ? globalThis.Alpine.store("welcomeStore")
+          : null;
+      const welcomeVisible = Boolean(welcomeStore && welcomeStore.isVisible);
+
+      // No context selected, try to select the first available item unless welcome screen is active
+      if (!welcomeVisible && contexts.length > 0) {
         const firstChatId = chatsStore.firstId();
         if (firstChatId) {
           setContext(firstChatId);
@@ -415,25 +454,10 @@ globalThis.pauseAgent = async function (paused) {
   await inputStore.pauseAgent(paused);
 };
 
-globalThis.resetChat = async function (ctxid = null) {
-  await chatsStore.resetChat(ctxid);
-};
-
-globalThis.newChat = async function () {
-  await chatsStore.newChat();
-};
-
-globalThis.killChat = async function (id) {
-  await chatsStore.killChat(id);
-};
-
-globalThis.selectChat = async function (id) {
-  await chatsStore.selectChat(id);
-};
-
 function generateShortId() {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  let result = '';
+  const chars =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  let result = "";
   for (let i = 0; i < 8; i++) {
     result += chars.charAt(Math.floor(Math.random() * chars.length));
   }
@@ -443,7 +467,7 @@ function generateShortId() {
 export const newContext = function () {
   context = generateShortId();
   setContext(context);
-}
+};
 globalThis.newContext = newContext;
 
 export const setContext = function (id) {
@@ -470,80 +494,28 @@ export const setContext = function (id) {
   if (localStorage.getItem("speech") == "true") skipOneSpeech = true;
 };
 
+export const deselectChat = function () {
+  // Clear current context to show welcome screen
+  setContext(null);
+
+  // Clear localStorage selections so we don't auto-restore
+  localStorage.removeItem("lastSelectedChat");
+  localStorage.removeItem("lastSelectedTask");
+
+  // Clear the chat history
+  chatHistory.innerHTML = "";
+};
+globalThis.deselectChat = deselectChat;
+
 export const getContext = function () {
   return context;
-}
+};
 globalThis.getContext = getContext;
 globalThis.setContext = setContext;
 
 export const getChatBasedId = function (id) {
   return context + "-" + globalThis.resetCounter + "-" + id;
 };
-
-globalThis.toggleAutoScroll = async function (_autoScroll) {
-  autoScroll = _autoScroll;
-};
-
-globalThis.toggleJson = async function (showJson) {
-  css.toggleCssProperty(".msg-json", "display", showJson ? "block" : "none");
-};
-
-globalThis.toggleThoughts = async function (showThoughts) {
-  css.toggleCssProperty(
-    ".msg-thoughts",
-    "display",
-    showThoughts ? undefined : "none"
-  );
-};
-
-globalThis.toggleUtils = async function (showUtils) {
-  css.toggleCssProperty(
-    ".message-util",
-    "display",
-    showUtils ? undefined : "none"
-  );
-};
-
-globalThis.toggleDarkMode = function (isDark) {
-  if (isDark) {
-    document.body.classList.remove("light-mode");
-    document.body.classList.add("dark-mode");
-  } else {
-    document.body.classList.remove("dark-mode");
-    document.body.classList.add("light-mode");
-  }
-  console.log("Dark mode:", isDark);
-  localStorage.setItem("darkMode", isDark);
-};
-
-globalThis.toggleSpeech = function (isOn) {
-  console.log("Speech:", isOn);
-  localStorage.setItem("speech", isOn);
-  if (!isOn) speechStore.stopAudio();
-};
-
-globalThis.nudge = async function () {
-  await inputStore.nudge();
-};
-
-globalThis.restart = async function () {
-  await chatsStore.restart();
-};
-
-// Modify this part
-document.addEventListener("DOMContentLoaded", () => {
-  const isDarkMode = localStorage.getItem("darkMode") !== "false";
-  toggleDarkMode(isDarkMode);
-});
-
-globalThis.loadChats = async function () {
-  await chatsStore.loadChats();
-};
-
-globalThis.saveChat = async function () {
-  await chatsStore.saveChat();
-};
-
 
 function addClassToElement(element, className) {
   element.classList.add(className);
@@ -553,35 +525,27 @@ function removeClassFromElement(element, className) {
   element.classList.remove(className);
 }
 
-function justToast(text, type = "info", timeout = 5000, group = "") {
-  notificationStore.addFrontendToastOnly(
-    type,
-    text,
-    "",
-    timeout / 1000,
-    group
-  )
+export function justToast(text, type = "info", timeout = 5000, group = "") {
+  notificationStore.addFrontendToastOnly(type, text, "", timeout / 1000, group);
 }
 globalThis.justToast = justToast;
-  
 
-function toast(text, type = "info", timeout = 5000) {
+export function toast(text, type = "info", timeout = 5000) {
   // Convert timeout from milliseconds to seconds for new notification system
   const display_time = Math.max(timeout / 1000, 1); // Minimum 1 second
 
   // Use new frontend notification system based on type
-    switch (type.toLowerCase()) {
-      case "error":
-        return notificationStore.frontendError(text, "Error", display_time);
-      case "success":
-        return notificationStore.frontendInfo(text, "Success", display_time);
-      case "warning":
-        return notificationStore.frontendWarning(text, "Warning", display_time);
-      case "info":
-      default:
-        return notificationStore.frontendInfo(text, "Info", display_time);
-    }
-
+  switch (type.toLowerCase()) {
+    case "error":
+      return notificationStore.frontendError(text, "Error", display_time);
+    case "success":
+      return notificationStore.frontendInfo(text, "Success", display_time);
+    case "warning":
+      return notificationStore.frontendWarning(text, "Warning", display_time);
+    case "info":
+    default:
+      return notificationStore.frontendInfo(text, "Info", display_time);
+  }
 }
 globalThis.toast = toast;
 
@@ -592,13 +556,13 @@ function scrollChanged(isAtBottom) {
   preferencesStore.autoScroll = isAtBottom;
 }
 
-function updateAfterScroll() {
+export function updateAfterScroll() {
   // const toleranceEm = 1; // Tolerance in em units
   // const tolerancePx = toleranceEm * parseFloat(getComputedStyle(document.documentElement).fontSize); // Convert em to pixels
   const tolerancePx = 10;
   const chatHistory = document.getElementById("chat-history");
   if (!chatHistory) return;
-  
+
   const isAtBottom =
     chatHistory.scrollHeight - chatHistory.scrollTop <=
     chatHistory.clientHeight + tolerancePx;
@@ -648,9 +612,9 @@ document.addEventListener("DOMContentLoaded", function () {
   progressBar = document.getElementById("progress-bar");
   autoScrollSwitch = document.getElementById("auto-scroll-switch");
   timeDate = document.getElementById("time-date-container");
-  
+
   // Sidebar and input event listeners are now handled by their respective stores
-  
+
   if (chatHistory) {
     chatHistory.addEventListener("scroll", updateAfterScroll);
   }
