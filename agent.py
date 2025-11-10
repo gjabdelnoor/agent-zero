@@ -280,6 +280,12 @@ class AgentConfig:
     profile: str = ""
     memory_subdir: str = ""
     knowledge_subdirs: list[str] = field(default_factory=lambda: ["default", "custom"])
+    memory_backend: str = "neo4j"
+    neo4j_uri: str = ""
+    neo4j_username: str = ""
+    neo4j_password: str = ""
+    neo4j_database: str = ""
+    neo4j_vector_dimensions: int = 4096
     browser_http_headers: dict[str, str] = field(default_factory=dict)  # Custom HTTP headers for browser requests
     code_exec_ssh_enabled: bool = True
     code_exec_ssh_addr: str = "localhost"

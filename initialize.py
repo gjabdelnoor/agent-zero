@@ -78,6 +78,12 @@ def initialize_agent():
         profile=current_settings["agent_profile"],
         memory_subdir=current_settings["agent_memory_subdir"],
         knowledge_subdirs=[current_settings["agent_knowledge_subdir"], "default"],
+        memory_backend=current_settings["memory_backend"],
+        neo4j_uri=current_settings["neo4j_uri"],
+        neo4j_username=current_settings["neo4j_username"],
+        neo4j_password=current_settings["neo4j_password"],
+        neo4j_database=current_settings["neo4j_database"],
+        neo4j_vector_dimensions=current_settings["neo4j_vector_dimensions"],
         mcp_servers=current_settings["mcp_servers"],
         browser_http_headers=current_settings["browser_http_headers"],
         # code_exec params get initialized in _set_runtime_config
