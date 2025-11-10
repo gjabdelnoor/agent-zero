@@ -29,7 +29,7 @@ from python.helpers import knowledge_import
 from python.helpers.neo4j_memory import Neo4jMemory, list_memory_subdirs
 from python.helpers.log import Log, LogItem
 from enum import Enum
-from agent import Agent, AgentContext
+from agent import Agent, AgentConfig, AgentContext
 import models
 import logging
 from simpleeval import simple_eval

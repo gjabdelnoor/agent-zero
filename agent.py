@@ -311,6 +311,7 @@ class LoopData:
         self.extras_temporary: OrderedDict[str, history.MessageContent] = OrderedDict()
         self.extras_persistent: OrderedDict[str, history.MessageContent] = OrderedDict()
         self.last_response = ""
+        self.repeat_count = 0
         self.params_temporary: dict = {}
         self.params_persistent: dict = {}
         self.current_tool = None
@@ -439,17 +440,37 @@ class Agent:
                         if (
                             self.loop_data.last_response == agent_response
                         ):  # if assistant_response is the same as last message in history, let him know
+                            self.loop_data.repeat_count += 1
                             # Append the assistant's response to the history
                             self.hist_add_ai_response(agent_response)
                             # Append warning message to the history
-                            warning_msg = self.read_prompt("fw.msg_repeat.md")
-                            self.hist_add_warning(message=warning_msg)
-                            PrintStyle(font_color="orange", padding=True).print(
-                                warning_msg
+                            repeat_level = self.loop_data.repeat_count
+                            warning_key = (
+                                "fw.msg_repeat.md"
+                                if repeat_level == 1
+                                else f"fw.msg_repeat.{min(repeat_level, 4)}.md"
                             )
-                            self.context.log.log(type="warning", content=warning_msg)
+                            warning_msg = self.read_prompt(warning_key)
+                            self.hist_add_warning(message=warning_msg)
+
+                            style_map = {
+                                1: {"font_color": "orange"},
+                                2: {"font_color": "#ff8800"},
+                                3: {"font_color": "#ff4500", "background_color": "black"},
+                                4: {"font_color": "#ffffff", "background_color": "#b30000"},
+                            }
+                            style = style_map.get(min(repeat_level, 4), style_map[4])
+                            PrintStyle(padding=True, **style).print(warning_msg)
+
+                            log_type = "error" if repeat_level >= 4 else "warning"
+                            self.context.log.log(type=log_type, content=warning_msg)
+
+                            if repeat_level >= 4:
+                                self.context.paused = True
+                                return None
 
                         else:  # otherwise proceed with tool
+                            self.loop_data.repeat_count = 0
                             # Append the assistant's response to the history
                             self.hist_add_ai_response(agent_response)
                             # process tools requested in agent message
