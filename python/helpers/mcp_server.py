@@ -1,5 +1,5 @@
 import os
-from typing import Annotated, Literal, Union
+from typing import Annotated, Any, Literal, Union
 from urllib.parse import urlparse
 from openai import BaseModel
 from pydantic import Field
@@ -278,6 +278,9 @@ class DynamicMcpProxy:
         self.http_app: ASGIApp | None = None
         self.http_session_manager = None
         self.http_session_task_group = None
+        self._message_path: str | None = None
+        self._sse_path: str | None = None
+        self._http_path: str | None = None
         self._lock = threading.RLock()  # Use RLock to avoid deadlocks
         self.reconfigure(cfg["mcp_server_token"])
 
@@ -292,35 +295,47 @@ class DynamicMcpProxy:
             return
 
         self.token = token
-        sse_path = f"/t-{self.token}/sse"
-        http_path = f"/t-{self.token}/http"
-        message_path = f"/t-{self.token}/messages/"
+        self._sse_path = f"/t-{self.token}/sse"
+        self._http_path = f"/t-{self.token}/http"
+        self._message_path = f"/t-{self.token}/messages/"
 
-        # Update settings in the MCP server instance if provided
-        mcp_server.settings.message_path = message_path
-        mcp_server.settings.sse_path = sse_path
+        server_settings = getattr(mcp_server, "settings", None)
+        if server_settings is not None:
+            try:
+                server_settings.message_path = self._message_path
+                server_settings.sse_path = self._sse_path
+            except Exception:
+                # Some FastMCP versions expose read-only settings; ignore updates there.
+                pass
+
+        auth_provider = getattr(mcp_server, "_auth_server_provider", None)
+        auth_settings = getattr(server_settings, "auth", None) if server_settings else None
+        debug: bool = bool(getattr(server_settings, "debug", False)) if server_settings else False
+        default_message_path = getattr(server_settings, "message_path", "/messages/")
+        default_sse_path = getattr(server_settings, "sse_path", "/sse")
+        routes: list[Any] = list(getattr(mcp_server, "_additional_http_routes", []) or [])
 
         # Create new MCP apps with updated settings
         with self._lock:
             self.sse_app = create_sse_app(
                 server=mcp_server,
-                message_path=mcp_server.settings.message_path,
-                sse_path=mcp_server.settings.sse_path,
-                auth_server_provider=mcp_server._auth_server_provider,
-                auth_settings=mcp_server.settings.auth,
-                debug=mcp_server.settings.debug,
-                routes=mcp_server._additional_http_routes,
+                message_path=self._message_path or default_message_path,
+                sse_path=self._sse_path or default_sse_path,
+                auth_server_provider=auth_provider,
+                auth_settings=auth_settings,
+                debug=debug,
+                routes=routes,
                 middleware=[Middleware(BaseHTTPMiddleware, dispatch=mcp_middleware)],
             )
 
             # For HTTP, we need to create a custom app since the lifespan manager
             # doesn't work properly in our Flask/Werkzeug environment
             self.http_app = self._create_custom_http_app(
-                http_path,
-                mcp_server._auth_server_provider,
-                mcp_server.settings.auth,
-                mcp_server.settings.debug,
-                mcp_server._additional_http_routes,
+                self._http_path,
+                auth_provider,
+                auth_settings,
+                debug,
+                routes,
             )
 
     def _create_custom_http_app(self, streamable_http_path, auth_server_provider, auth_settings, debug, routes):
