@@ -333,6 +333,12 @@ class HandledException(Exception):
     pass
 
 
+class AgentPausedException(HandledException):
+    """Raised when the agent intentionally pauses and requires external action."""
+
+    pass
+
+
 class Agent:
 
     DATA_NAME_SUPERIOR = "_superior"
@@ -467,7 +473,9 @@ class Agent:
 
                             if repeat_level >= 4:
                                 self.context.paused = True
-                                return None
+                                raise AgentPausedException(
+                                    "Agent paused after repeated identical responses"
+                                )
 
                         else:  # otherwise proceed with tool
                             self.loop_data.repeat_count = 0
