@@ -1,16 +1,34 @@
 import { createStore } from "/js/AlpineStore.js";
-import { sendJsonData } from "/index.js";
+import {
+  sendJsonData,
+  getContext,
+  setContext,
+  poll as triggerPoll,
+  updateAfterScroll,
+  toastFetchError,
+  toast,
+  justToast,
+  getConnectionStatus,
+} from "/index.js";
 import { store as notificationStore } from "/components/notifications/notification-store.js";
+import { store as tasksStore } from "/components/sidebar/tasks/tasks-store.js";
 
 const model = {
   contexts: [],
   selected: "",
+  selectedContext: null,
+
+  // for convenience
+  getSelectedChatId() {
+    return this.selected;
+  },
 
   init() {
     // Initialize from localStorage
     const lastSelectedChat = localStorage.getItem("lastSelectedChat");
     if (lastSelectedChat) {
-      this.selected = lastSelectedChat;
+      this.selectChat(lastSelectedChat);
+      // this.selected = lastSelectedChat;
     }
   },
 
@@ -24,26 +42,20 @@ const model = {
 
   // Select a chat
   async selectChat(id) {
-    const currentContext = globalThis.getContext?.();
+    const currentContext = getContext();
     if (id === currentContext) return; // already selected
-    
+
     // Proceed with context selection
-    if (globalThis.setContext) {
-      globalThis.setContext(id);
-    }
-    
+    setContext(id);
+
     // Update selection state (will also persist to localStorage)
     this.setSelected(id);
-    
+
     // Trigger immediate poll
-    if (globalThis.poll) {
-      globalThis.poll();
-    }
-    
+    triggerPoll();
+
     // Update scroll
-    if (globalThis.updateAfterScroll) {
-      globalThis.updateAfterScroll();
-    }
+    updateAfterScroll();
   },
 
   // Delete a chat
@@ -75,14 +87,10 @@ const model = {
       this.contexts = [...updatedContexts];
 
       // Show success notification
-      if (globalThis.justToast) {
-        globalThis.justToast("Chat deleted successfully", "success", 1000, "chat-removal");
-      }
+      justToast("Chat deleted successfully", "success", 1000, "chat-removal");
     } catch (e) {
       console.error("Error deleting chat:", e);
-      if (globalThis.toastFetchError) {
-        globalThis.toastFetchError("Error deleting chat", e);
-      }
+      toastFetchError("Error deleting chat", e);
     }
   },
 
@@ -101,16 +109,15 @@ const model = {
       await this.selectChat(alternateChat.id);
     } else {
       // If no other chats, create a new empty context
-      if (globalThis.newChat) {
-        await globalThis.newChat();
-      }
+      this.deselectChat();
+      //await this.newChat();
     }
   },
 
   // Reset current chat
   async resetChat(ctxid = null) {
     try {
-      const context = ctxid || this.selected || globalThis.getContext?.();
+      const context = ctxid || this.selected || getContext();
       await sendJsonData("/chat_reset", {
         context
       });
@@ -120,30 +127,49 @@ const model = {
         globalThis.resetCounter = globalThis.resetCounter + 1;
       }
       
-      if (globalThis.updateAfterScroll) {
-        globalThis.updateAfterScroll();
-      }
+      updateAfterScroll();
     } catch (e) {
-      if (globalThis.toastFetchError) {
-        globalThis.toastFetchError("Error resetting chat", e);
-      }
+      toastFetchError("Error resetting chat", e);
     }
   },
 
   // Create new chat
   async newChat() {
     try {
-      if (globalThis.newContext) {
-        globalThis.newContext();
+
+      // first create a new chat on the backend
+      const response = await sendJsonData("/chat_create", {
+        current_context: this.selected
+      });
+
+      if (response.ok) {
+        this.selectChat(response.ctxid);
+        return;
       }
-      if (globalThis.updateAfterScroll) {
-        globalThis.updateAfterScroll();
-      }
+
+
+      // if (globalThis.newContext) {
+      //   globalThis.newContext();
+      // }
+      // if (globalThis.updateAfterScroll) {
+      //   globalThis.updateAfterScroll();
+      // }
+      // // UX: scroll-to-top
+      // requestAnimationFrame(() => this._scrollChatsToTop());
     } catch (e) {
-      if (globalThis.toastFetchError) {
-        globalThis.toastFetchError("Error creating new chat", e);
-      }
+      toastFetchError("Error creating new chat", e);
     }
+  },
+
+  deselectChat(){
+    globalThis.deselectChat(); //TODO move here
+  },
+
+  // Smoothly scroll the chats list to top if present
+  _scrollChatsToTop() {
+    const listEl = document.querySelector('#chats-section .chats-config-list');
+    if (!listEl) return; // no-op if not in DOM
+    listEl.scrollTo({ top: 0, behavior: 'smooth' });
   },
 
   // Load chats from files
@@ -153,37 +179,33 @@ const model = {
       const response = await sendJsonData("/chat_load", { chats: fileContents });
 
       if (!response) {
-        if (globalThis.toast) globalThis.toast("No response returned.", "error");
+        toast("No response returned.", "error");
       } else {
         // Set context to first loaded chat
-        if (globalThis.setContext && response.ctxids?.[0]) {
-          globalThis.setContext(response.ctxids[0]);
+        if (response.ctxids?.[0]) {
+          setContext(response.ctxids[0]);
         }
-        if (globalThis.toast) globalThis.toast("Chats loaded.", "success");
+        toast("Chats loaded.", "success");
       }
     } catch (e) {
-      if (globalThis.toastFetchError) {
-        globalThis.toastFetchError("Error loading chats", e);
-      }
+      toastFetchError("Error loading chats", e);
     }
   },
 
   // Save current chat
   async saveChat() {
     try {
-      const context = this.selected || globalThis.getContext?.();
+      const context = this.selected || getContext();
       const response = await sendJsonData("/chat_export", { ctxid: context });
 
       if (!response) {
-        if (globalThis.toast) globalThis.toast("No response returned.", "error");
+        toast("No response returned.", "error");
       } else {
         this.downloadFile(response.ctxid + ".json", response.content);
-        if (globalThis.toast) globalThis.toast("Chat file downloaded.", "success");
+        toast("Chat file downloaded.", "success");
       }
     } catch (e) {
-      if (globalThis.toastFetchError) {
-        globalThis.toastFetchError("Error saving chat", e);
-      }
+      toastFetchError("Error saving chat", e);
     }
   },
 
@@ -250,6 +272,9 @@ const model = {
   // Set selected context
   setSelected(contextId) {
     this.selected = contextId;
+    this.selectedContext = this.contexts.find((ctx) => ctx.id === contextId);
+    // if not found in contexts, try to find in tasks < not nice, will need refactor later
+    if(!this.selectedContext) this.selectedContext = tasksStore.tasks.find((ctx) => ctx.id === contextId);
     localStorage.setItem("lastSelectedChat", contextId);
   },
 
@@ -257,7 +282,7 @@ const model = {
   async restart() {
     try {
       // Check connection status
-      const connectionStatus = globalThis.getConnectionStatus?.();
+      const connectionStatus = getConnectionStatus();
       if (connectionStatus === false) {
         await notificationStore.frontendError(
           "Backend disconnected, cannot restart.",

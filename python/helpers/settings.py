@@ -11,7 +11,7 @@ from python.helpers import runtime, whisper, defer, git
 from . import files, dotenv
 from python.helpers.print_style import PrintStyle
 from python.helpers.providers import get_providers
-from python.helpers.secrets import SecretsManager
+from python.helpers.secrets import get_default_secrets_manager
 from python.helpers import dirty_json
 
 
@@ -88,14 +88,6 @@ class Settings(TypedDict):
     rfc_port_ssh: int
 
     shell_interface: Literal['local','ssh']
-
-    skills_directories: list[str]
-    skills_enabled: bool
-    skills_auto_load: bool
-    skills_search_threshold: float
-    skills_metadata_in_prompt: bool
-    skills_max_suggestions: int
-    skills_recall_interval: int
 
     stt_model_size: str
     stt_language: str
@@ -1118,7 +1110,7 @@ def convert_out(settings: Settings) -> SettingsOutput:
    # Secrets section
     secrets_fields: list[SettingsField] = []
 
-    secrets_manager = SecretsManager.get_instance()
+    secrets_manager = get_default_secrets_manager()
     try:
         secrets = secrets_manager.get_masked_secrets()
     except Exception:
@@ -1425,10 +1417,9 @@ def _write_sensitive_settings(settings: Settings):
         set_root_password(settings["root_password"])
 
     # Handle secrets separately - merge with existing preserving comments/order and support deletions
-    secrets_manager = SecretsManager.get_instance()
+    secrets_manager = get_default_secrets_manager()
     submitted_content = settings["secrets"]
     secrets_manager.save_secrets_with_merge(submitted_content)
-    secrets_manager.clear_cache()  # Clear cache to reload secrets
 
 
 
@@ -1496,13 +1487,6 @@ def get_default_settings() -> Settings:
         rfc_port_http=55080,
         rfc_port_ssh=55022,
         shell_interface="local" if runtime.is_dockerized() else "ssh",
-        skills_directories=["custom", "builtin", "shared"],
-        skills_enabled=True,
-        skills_auto_load=False,
-        skills_search_threshold=0.75,
-        skills_metadata_in_prompt=True,
-        skills_max_suggestions=3,
-        skills_recall_interval=3,
         stt_model_size="base",
         stt_language="en",
         stt_silence_threshold=0.3,
